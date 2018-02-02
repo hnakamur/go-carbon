@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	whisper "github.com/lomik/go-whisper"
 	"go.uber.org/zap"
@@ -42,10 +43,10 @@ type Whisper struct {
 	mockStore           func() (StoreFunc, func())
 	logger              *zap.Logger
 	createLogger        *zap.Logger
-	// blockThrottleNs        uint64 // sum ns counter
-	// blockQueueGetNs        uint64 // sum ns counter
-	// blockAvoidConcurrentNs uint64 // sum ns counter
-	// blockUpdateManyNs      uint64 // sum ns counter
+	blockThrottleNs        uint64 // sum ns counter
+	blockQueueGetNs        uint64 // sum ns counter
+	blockAvoidConcurrentNs uint64 // sum ns counter
+	blockUpdateManyNs      uint64 // sum ns counter
 }
 
 // NewWhisper create instance of Whisper
@@ -118,10 +119,10 @@ func fnv32(key string) uint32 {
 func store(p *Whisper, values *points.Points) {
 	// avoid concurrent store same metric
 	// @TODO: may be flock?
-	// start := time.Now()
+	start := time.Now()
 	mutexIndex := fnv32(values.Metric) % storeMutexCount
 	p.storeMutex[mutexIndex].Lock()
-	// atomic.AddUint64(&p.blockAvoidConcurrentNs, uint64(time.Since(start).Nanoseconds()))
+	atomic.AddUint64(&p.blockAvoidConcurrentNs, uint64(time.Since(start).Nanoseconds()))
 	defer p.storeMutex[mutexIndex].Unlock()
 
 	var path string
@@ -211,9 +212,9 @@ func store(p *Whisper, values *points.Points) {
 		}
 	}()
 
-	// start = time.Now()
+	start = time.Now()
 	w.UpdateMany(points)
-	// atomic.AddUint64(&p.blockUpdateManyNs, uint64(time.Since(start).Nanoseconds()))
+	atomic.AddUint64(&p.blockUpdateManyNs, uint64(time.Since(start).Nanoseconds()))
 }
 
 func (p *Whisper) worker(recv func(chan bool) *points.Points, confirm func(*points.Points), exit chan bool) {
@@ -225,18 +226,18 @@ func (p *Whisper) worker(recv func(chan bool) *points.Points, confirm func(*poin
 
 LOOP:
 	for {
-		// start := time.Now()
+		start := time.Now()
 		select {
 		case <-p.throttleTicker.C:
-			// atomic.AddUint64(&p.blockThrottleNs, uint64(time.Since(start).Nanoseconds()))
+			atomic.AddUint64(&p.blockThrottleNs, uint64(time.Since(start).Nanoseconds()))
 			// pass
 		case <-exit:
 			return
 		}
 
-		// start = time.Now()
+		start = time.Now()
 		points := recv(exit)
-		// atomic.AddUint64(&p.blockQueueGetNs, uint64(time.Since(start).Nanoseconds()))
+		atomic.AddUint64(&p.blockQueueGetNs, uint64(time.Since(start).Nanoseconds()))
 		if points == nil {
 			// exit closed
 			break LOOP
@@ -274,10 +275,10 @@ func (p *Whisper) Stat(send helper.StatCallback) {
 	send("maxUpdatesPerSecond", float64(p.maxUpdatesPerSecond))
 	send("workers", float64(p.workersCount))
 
-	// helper.SendAndSubstractUint64("blockThrottleNs", &p.blockThrottleNs, send)
-	// helper.SendAndSubstractUint64("blockQueueGetNs", &p.blockQueueGetNs, send)
-	// helper.SendAndSubstractUint64("blockAvoidConcurrentNs", &p.blockAvoidConcurrentNs, send)
-	// helper.SendAndSubstractUint64("blockUpdateManyNs", &p.blockUpdateManyNs, send)
+	helper.SendAndSubstractUint64("blockThrottleNs", &p.blockThrottleNs, send)
+	helper.SendAndSubstractUint64("blockQueueGetNs", &p.blockQueueGetNs, send)
+	helper.SendAndSubstractUint64("blockAvoidConcurrentNs", &p.blockAvoidConcurrentNs, send)
+	helper.SendAndSubstractUint64("blockUpdateManyNs", &p.blockUpdateManyNs, send)
 
 }
 
